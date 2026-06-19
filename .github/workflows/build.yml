@@ -1,67 +1,170 @@
-name: Build crankshaft
+name: Build Crankshaft Fork
 
 on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows
+          - mac
+          - linux
+
   push:
     branches:
+      - main
       - master
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+  build-windows:
+    name: Build Windows
+    if: github.event_name == 'push' || github.event.inputs.target == 'all' || github.event.inputs.target == 'windows'
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          persist-credentials: false
+          node-version: "22"
+          cache: "pnpm"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
-
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: pnpm/action-setup@v4
         with:
-          node-version: latest
+          version: 10
+          run_install: false
 
       - name: Install dependencies
-        run: pnpm install
+        shell: pwsh
+        run: |
+          pnpm config set registry https://registry.npmjs.org/
+          pnpm install --frozen-lockfile
 
-      - name: Build and release if the draft exists
-        run: pnpm run dist
+      - name: Build Windows
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          pnpm run build
+          pnpm exec electron-builder --win nsis portable zip --x64 --publish never
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Show dist files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse dist | Select-Object FullName, Length
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.os }}
-          path: dist/crankshaft-*
-  release:
-    needs: build
+          name: Crankshaft-Windows
+          if-no-files-found: error
+          path: |
+            dist/**/*.exe
+            dist/**/*.zip
 
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
+  build-mac:
+    name: Build macOS
+    if: github.event_name == 'push' || github.event.inputs.target == 'all' || github.event.inputs.target == 'mac'
+    runs-on: macos-14
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Download artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-
-      - name: Create nightly release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          files: binaries-*/*
-          body_path: ${{ github.workspace }}/.github/workflows/notes.md
-          name: Nightly release
-          tag_name: nightly
-          prerelease: true
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install dependencies
+        run: |
+          pnpm config set registry https://registry.npmjs.org/
+          pnpm install --frozen-lockfile
+
+      - name: Build macOS
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          pnpm run build
+          pnpm exec electron-builder --mac dmg --arm64 --publish never
+
+      - name: Show dist files
+        run: |
+          find dist -maxdepth 5 -print
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Crankshaft-macOS-arm64
+          if-no-files-found: error
+          path: |
+            dist/**/*.dmg
+
+  build-linux:
+    name: Build Linux
+    if: github.event_name == 'push' || github.event.inputs.target == 'all' || github.event.inputs.target == 'linux'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm
+
+      - name: Install dependencies
+        run: |
+          pnpm config set registry https://registry.npmjs.org/
+          pnpm install --frozen-lockfile
+
+      - name: Build Linux
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          pnpm run build
+          pnpm exec electron-builder --linux AppImage --x64 --publish never
+
+      - name: Show dist files
+        run: |
+          find dist -maxdepth 5 -print
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Crankshaft-Linux
+          if-no-files-found: error
+          path: |
+            dist/**/*.AppImage
